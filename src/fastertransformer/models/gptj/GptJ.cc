@@ -20,6 +20,7 @@
 #include "src/fastertransformer/kernels/gpt_kernels.h"
 #include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
 #include <algorithm>
+#include <chrono>
 
 namespace fastertransformer {
 
@@ -570,6 +571,8 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
         sync_check_cuda_error();
     }
 
+    std::cerr << "MAX_INPUT_LENGTH: " << max_input_length << std::endl;
+    std::cerr << "MAX_OUTPUT_LENGTH: " << max_output_seq_len << std::endl;
     for (int step = max_input_length; step < (int)max_output_seq_len; step++) {
         const int src_indir_idx = (step - max_input_length) % 2;
         const int tgt_indir_idx = 1 - src_indir_idx;
@@ -810,7 +813,13 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
             sync_check_cuda_error();
         }
 
+	std::cerr << "BATCHSIZEXBEAMWIDTH: " << batch_size * beam_width << std::endl;
+	    auto start = std::chrono::high_resolution_clock::now(); // 记录开始时间
         cudaD2Hcpy(h_finished_buf_, finished_buf_, batch_size * beam_width);
+	    auto end = std::chrono::high_resolution_clock::now(); // 记录结束时间
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start); // 计算时间差
+    std::cerr << "D2HElapsed time: " << duration.count() << " microseconds" << std::endl; // 输出执行时间
+
         uint sum = 0;
         for (uint i = 0; i < batch_size * beam_width; i++) {
             if (has_per_item_requested_length) {
@@ -819,8 +828,14 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
             }
             sum += (int)h_finished_buf_[i];
         }
+	std::cerr << "Finished sum: " << sum << std::endl;
+	std::cerr << "HasPerItemRequestedLength: " << has_per_item_requested_length << std::endl;
         if (has_per_item_requested_length) {
+	    auto start = std::chrono::high_resolution_clock::now(); // 记录开始时间
             cudaH2Dcpy(finished_buf_, h_finished_buf_, batch_size * beam_width);
+	    auto end = std::chrono::high_resolution_clock::now(); // 记录结束时间
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start); // 计算时间差
+    std::cerr << "H2DElapsed time: " << duration.count() << " microseconds" << std::endl; // 输出执行时间
         }
         if (sum == batch_size * beam_width) {
             break;
