@@ -20,6 +20,7 @@
 #include "src/fastertransformer/kernels/gpt_kernels.h"
 #include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
 #include <algorithm>
+#include <chrono>
 
 namespace fastertransformer {
 
@@ -103,8 +104,17 @@ void GptJ<T>::allocateBuffer(size_t batch_size, size_t beam_width, size_t max_se
     nccl_logits_buf_ =
         (float*)(allocator_->reMalloc(nccl_logits_buf_, sizeof(float) * batchxbeam * vocab_size_padded_, false));
     cum_log_probs_ = (float*)(allocator_->reMalloc(cum_log_probs_, sizeof(float) * batchxbeam, false));
-    finished_buf_ = (bool*)(allocator_->reMalloc(finished_buf_, sizeof(bool) * batchxbeam, false));
-    h_finished_buf_ = new bool[batchxbeam];
+    // h_finished_buf_ = new bool[batchxbeam];
+    // finished_buf_ = (bool*)(allocator_->reMalloc(finished_buf_, sizeof(bool) * batchxbeam, false));
+    cudaSetDeviceFlags(cudaDeviceMapHost);
+    cudaError_t cudaError = cudaHostAlloc(&h_finished_buf_, sizeof(bool) * batchxbeam, cudaHostAllocMapped);
+    if (cudaError != 0) {
+	    std::cerr << "Error occured when invoking cudaHostAlloc: " << cudaError << cudaGetErrorString(cudaError) << std::endl;
+    }
+    cudaError = cudaHostGetDevicePointer(&finished_buf_, h_finished_buf_, cudaHostAllocMapped);
+    if (cudaError != 0) {
+	    std::cerr << "Error occured when invoking cudaGetDevicePointer: " << cudaError << cudaGetErrorString(cudaError) << std::endl;
+    }
 
     key_cache_ = (T*)(allocator_->reMalloc(key_cache_, sizeof(T) * self_cache_size * 2, true));
     value_cache_ = key_cache_ + self_cache_size;
@@ -154,8 +164,11 @@ void GptJ<T>::freeBuffer()
         allocator_->free(nccl_logits_buf_);
         allocator_->free(cum_log_probs_);
         allocator_->free(finished_buf_);
-        delete[] h_finished_buf_;
-
+        // delete[] h_finished_buf_;
+        cudaError_t cudaError = cudaFreeHost(h_finished_buf_);
+	if (cudaError != 0) {
+		std::cerr << "Error occured when invoking cudaHostFree" << cudaError << std::endl;
+	}
         allocator_->free(key_cache_);
         if (cache_indirections_[0] != nullptr) {
             allocator_->free(cache_indirections_[0]);
@@ -570,6 +583,8 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
         sync_check_cuda_error();
     }
 
+    // std::cerr << "MAX_INPUT_LENGTH: " << max_input_length << std::endl;
+    // std::cerr << "MAX_OUTPUT_LENGTH: " << max_output_seq_len << std::endl;
     for (int step = max_input_length; step < (int)max_output_seq_len; step++) {
         const int src_indir_idx = (step - max_input_length) % 2;
         const int tgt_indir_idx = 1 - src_indir_idx;
@@ -810,17 +825,35 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
             sync_check_cuda_error();
         }
 
-        cudaD2Hcpy(h_finished_buf_, finished_buf_, batch_size * beam_width);
+	    auto start = std::chrono::high_resolution_clock::now(); // 记录开始时间
+//        cudaD2Hcpy(h_finished_buf_, finished_buf_, batch_size * beam_width);
+          cudaDeviceSynchronize();
+	    auto end = std::chrono::high_resolution_clock::now(); // 记录结束时间
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start); // 计算时间差
+    std::cerr << "D2HElapsed time: " << duration.count() << " microseconds" << std::endl; // 输出执行时间
+
         uint sum = 0;
+	bool changed = false;
         for (uint i = 0; i < batch_size * beam_width; i++) {
             if (has_per_item_requested_length) {
-                h_finished_buf_[i] |=
-                    step >= reinterpret_cast<const int*>(input_tensors->at("max_output_seq_len").data)[i / beam_width];
+                bool exceedMax = (step >= reinterpret_cast<const int*>(input_tensors->at("max_output_seq_len").data)[i / beam_width]);
+                // h_finished_buf_[i] |= exceedMax;
+		if (exceedMax && !h_finished_buf_[i]) {
+		  h_finished_buf_[i] = true;
+		  changed = true;
+		}
             }
             sum += (int)h_finished_buf_[i];
         }
-        if (has_per_item_requested_length) {
-            cudaH2Dcpy(finished_buf_, h_finished_buf_, batch_size * beam_width);
+//	std::cerr << "Finished sum: " << sum << std::endl;
+//	std::cerr << "HasPerItemRequestedLength: " << has_per_item_requested_length << std::endl;
+        if (has_per_item_requested_length && changed) {
+	    auto start = std::chrono::high_resolution_clock::now(); // 记录开始时间
+  //          cudaH2Dcpy(finished_buf_, h_finished_buf_, batch_size * beam_width);
+          cudaDeviceSynchronize();
+	    auto end = std::chrono::high_resolution_clock::now(); // 记录结束时间
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start); // 计算时间差
+    std::cerr << "H2DElapsed time: " << duration.count() << " microseconds" << std::endl; // 输出执行时间
         }
         if (sum == batch_size * beam_width) {
             break;
