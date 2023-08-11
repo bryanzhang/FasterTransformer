@@ -1,3 +1,5 @@
+From original repo v5.0 tag.
+
 # FasterTransformer
 
 This repository provides a script and recipe to run the highly optimized transformer-based encoder and decoder component, and it is tested and maintained by NVIDIA.
