@@ -570,6 +570,8 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
         sync_check_cuda_error();
     }
 
+    std::cerr << "MAX_INPUT_LENGTH: " << max_input_length << std::endl;
+    std::cerr << "MAX_OUTPUT_LENGTH: " << max_output_seq_len << std::endl;
     for (int step = max_input_length; step < (int)max_output_seq_len; step++) {
         const int src_indir_idx = (step - max_input_length) % 2;
         const int tgt_indir_idx = 1 - src_indir_idx;
@@ -810,6 +812,7 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
             sync_check_cuda_error();
         }
 
+	std::cerr << "BATCHSIZEXBEAMWIDTH: " << batch_size * beam_width << std::endl;
         cudaD2Hcpy(h_finished_buf_, finished_buf_, batch_size * beam_width);
         uint sum = 0;
         for (uint i = 0; i < batch_size * beam_width; i++) {
@@ -819,6 +822,7 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
             }
             sum += (int)h_finished_buf_[i];
         }
+	std::cerr << "Finished sum: " << sum << std::endl;
         if (has_per_item_requested_length) {
             cudaH2Dcpy(finished_buf_, h_finished_buf_, batch_size * beam_width);
         }
