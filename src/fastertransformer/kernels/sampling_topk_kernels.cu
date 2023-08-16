@@ -258,7 +258,9 @@ __global__ void topk_topp_stage_2_opt3_sampling(const int* __restrict topk_tmp_i
         if (sequence_length != nullptr && finished_buf != nullptr) {
             sequence_length[batch_id] =
                 finished_buf[batch_id] ? sequence_length[batch_id] : sequence_length[batch_id] + 1;
-            finished_buf[batch_id] = ids[batch_id] == end_ids[batch_id] ? 1 : 0;
+            // finished_buf[batch_id] = ids[batch_id] == end_ids[batch_id] ? 1 : 0;
+	    int id = ids[batch_id];
+	    finished_buf[batch_id] = (id == end_ids[batch_id] || id == 198 || id == 628 || id == 44320) ? 1 : 0;  // if there is '\n' the sequence will finish to save computing costs.
         }
     }
 }
